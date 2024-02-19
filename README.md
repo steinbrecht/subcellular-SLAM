@@ -14,7 +14,7 @@ This pipeline counts T2C mutations using the "CountT2C" program in the "t2c_coun
 
 ### Model fitting
 Corresponding folder: model_fit  
-This pipeline fits a kinetic model to the fully-processed subcellular labeling data using the python package "lmfit". The are two models: 3-step and 4-step, each with its own Snakefile. Each Snakefile outputs two tables where each row corresponds to a specific gene. One table contains the best fit results for the kinetic parameters along with other fit statistics. The other table contains the varaiance of each kinetic parameter calculated from the ten best fit results.
+This pipeline fits a kinetic model to the fully-processed subcellular labeling data using the python package *lmfit*. The are two models: 3-step and 4-step, each with its own Snakefile. Each Snakefile outputs two tables where each row corresponds to a specific gene. One table contains the best fit results for the kinetic parameters along with other fit statistics. The other table contains the varaiance of each kinetic parameter calculated from the ten best fit results.
 
 ## Corresponding raw data
 The fastq files for which this pipeline was made can be found on GEO under accession number "GSE252199".
@@ -22,6 +22,6 @@ The fastq files for which this pipeline was made can be found on GEO under acces
 ## Reproducibility
 Instructions to run the the pipelines.
 - install conda (or even better mamba) if necessary
-- run `conda env create -f <placeholder_conda_env_file>` to create a new conda environment with all the necessary packages to run the code
+- run `conda env create -f <placeholder_conda_env_file>` to create a new conda environment with all the necessary packages to run the code; each pipeline has its own environment files in its directory 
 - activate the environment with `conda activate <placeholder>`
 - run Snakemake simply with `snakemake`
