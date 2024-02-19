@@ -1,0 +1,56 @@
+# snakemake file that runs the 4-step model (including membrane compartment)
+# snakefile is run with the following command:
+# snakemake --snakefile Snakefile_3-step_model --profile brecht_profile/ -j 900 -R run_fit
+
+import pandas as pd
+
+
+# --- get list of genes to fit -------------------------------------------------
+LIST_GENES = (pd.read_csv('helper_data/final_list_of_genes_to_fit.txt', header=None)
+ .iloc[:,0]
+ .to_list()
+)
+
+# get list of genes to fit, but that have only 1 exon
+LIST_1EXON = (pd.read_csv('helper_data/list_fittable_genes_1_exon.txt', header=None)
+ .iloc[:,0]
+ .to_list()
+)
+
+# make function that chooses script to use according to == 1 or > 1 exons
+def choose_model(wildcards):
+    if wildcards.gene in LIST_1EXON:
+        model = '3-step_model_1exon'    # if #exons == 1, choose script accordingly 
+    else:
+        model = '3-step_model'          # else normal script (actual 4-step model)
+    return model
+
+
+# ------ rule all --------------------------------------------------------------
+# initial rule to get snakemake starting (only input given, no actual rule)
+# you cannot not use keywords in rule all, e.g. input:  table = 'table.csv', bla = ...
+rule all:
+    input:
+        expand('per_gene_data/{gene}/all_results_fit_run_3-step_model.tsv', gene=LIST_GENES)
+
+
+# ------ rule that runs the fit ------------------------------------------------
+rule run_fit:
+    threads: 1
+    resources:
+        mem_mb = 1000,
+        time = '04:00:00',
+    params:
+        model = choose_model
+    input:
+        T2C = 'per_gene_data/{gene}/T2C.tsv',
+        start_stop = 'per_gene_data/{gene}/exon_distance_to_end.tsv',
+        steadystate = 'per_gene_data/{gene}/steady_state_ratios.tsv',
+    output:
+        'per_gene_data/{gene}/all_results_fit_run_3-step_model.tsv'
+    conda: 'conda_envs/fit-env.yaml'
+    script:
+        "scripts/run_fit_{params.model}.py"
+# the accesses input and output variables by calling e.g. snakemake.output.table
+# you cannot use static output (e.g. table='table.csv') together with wildcard output
+# as multiple rules could write to the same file

@@ -1,0 +1,247 @@
+# --- THINGS TO CUSTOMIZE ----------------------------------------------
+# set the list of samples to process (example list given here)
+SAMPLES=["c0min1.cyto","n0min1.nuc"]
+
+# set your local directory (only points to your home dir now, change this)
+YOUR_DIR = $HOME
+
+OUTPUTDIR=YOUR_DIR + 'data/slamseq_normalized'
+SCRIPTDIR=YOUR_DIR + 'slamseq_normalization/'
+COUNTT2CDIR=YOUR_DIR + '../t2c_count_program/CountT2C/'
+GENOMEDIR=YOUR_DIR + 'data/genome_new'
+FASTQ=YOUR_DIR + 'data/fastq_slam'
+RSEMINDEXDIR=YOUR_DIR + 'data/genome_new/ref_rsem'
+
+
+# --- OTHER DIRECTORIES DEPENDENT ON DIRS SET ABOVE ----------------
+MUTTABLEDIRORIGINAL=OUTPUTDIR + '/mutation_tables'
+TMPDIRORIGINAL=OUTPUTDIR + '/tmp'
+NORMDATADIRORIGINAL=OUTPUTDIR + '/normalized_data'
+RSEMDIR=OUTPUTDIR + '/rsem'
+BAMDIR=OUTPUTDIR + '/alignment_data'
+TMPDIR=OUTPUTDIR + '/tmp'
+
+MUTTABLEDIRSLIDING=OUTPUTDIR + '/mutation_tables_sliding'
+TMPDIRSLIDING=OUTPUTDIR + '/tmp_sliding'
+NORMDATADIRSLIDING=OUTPUTDIR + '/normalized_data_sliding'
+GENEDATADIRSLIDING=OUTPUTDIR + '/genes'
+
+GENOME=GENOMEDIR + '/GRCm38.primary_assembly.genome.fa'
+MUTATIONFILE='mutations_miha_2018_09_27.tsv'
+ANNOTATIONFILEORIGINAL=GENOMEDIR + '/gencode.vM14.basic.annotation.gff3'
+ANNOTATIONDIRSLIDING=GENOMEDIR + '/rsem_based_annotation'
+
+COUNTT2C=COUNTT2CDIR + '/countT2C -x -q 30 -l 75  -p -c_r1_5p 6 -c_r2_5p 5 -c_r1_3p 0 -c_r2_3p 0'
+COUNTT2CSLIDING=COUNTT2CDIR + '/countT2C -x -a -q 30 -l 75  -p -c_r1_5p 6 -c_r2_5p 5 -c_r1_3p 0 -c_r2_3p 0'
+STAR='STAR'
+
+USEINTRONIC='TRUE'
+
+FITSCRIPT=SCRIPTDIR + 'fit_binomial_mixture_input_file.R'
+NORMSCRIPT=SCRIPTDIR + 'normalize_gene_data_all_interface.R'
+FILTERSCRIPT=SCRIPTDIR + 'filter_gene_data.R'
+DISTRIBUTESCRIPT=SCRIPTDIR + 'awk_collect.sh'
+COMPILESCRIPT=SCRIPTDIR+'compile_frequencies.sh'
+DOWNLOADSCRIPT=SCRIPTDIR+'download_genome.sh'
+
+NORANDOM='5000'
+RANDOMFACT='0.1'
+
+CONTIGS=['chr1','chr10','chr11','chr12','chr13','chr14','chr15','chr16','chr17','chr18','chr19','chr2','chr3','chr4','chr5','chr6','chr7','chr8','chr9','chrM','chrX','chrY']
+
+
+# --- SNAKEMAKE PART ----------------------------------------------------------
+rule all:
+ input:
+   [expand('{normdatadirsliding}/gene_data_normalized.{sample}.csv',sample=SAMPLES,normdatadirsliding=NORMDATADIRSLIDING),
+    GENEDATADIRSLIDING + '/gene_distribution_finished.txt',
+    expand('{muttabledirsliding}/gene_T2C.{sample}.tsv',sample=SAMPLES,muttabledirsliding=MUTTABLEDIRSLIDING),
+    expand('{normdatadiroriginal}/pconv_{sample}.csv',sample=SAMPLES,normdatadiroriginal=NORMDATADIRORIGINAL),
+    expand('{normdatadiroriginal}/pconv_exonic_{sample}.csv',sample=SAMPLES,normdatadiroriginal=NORMDATADIRORIGINAL),
+    NORMDATADIRSLIDING + '/all_samples_gene_entry.csv',
+    GENEDATADIRSLIDING + '/gene_list.csv',
+    expand('{rsemdir}/rsem_{sample}.tsv.genes.results',sample=SAMPLES,rsemdir=RSEMDIR)]
+
+
+################################3
+
+rule filterlist:
+  input:
+    NORMDATADIRSLIDING + '/all_samples_gene_entry.csv'
+  output:
+    GENEDATADIRSLIDING + '/gene_list.csv'
+  shell:
+    'Rscript {SCRIPTDIR}/filter_genes_for_fitting.R {NORMDATADIRSLIDING}/all_samples_gene_entry.csv {GENEDATADIRSLIDING}/gene_list.csv'
+
+rule allsamplesliding:
+  input:
+    expand('{normdatadirsliding}/gene_data_normalized.{sample}.csv',sample=SAMPLES,normdatadirsliding=NORMDATADIRSLIDING)
+  output:
+    NORMDATADIRSLIDING + '/all_samples_gene_entry.csv'
+  shell:
+    "grep -h 'gene' {NORMDATADIRSLIDING}/gene_data_normalized.*.csv | sed -e '2,${{/^sample/d' -e '}}' > {NORMDATADIRSLIDING}/all_samples_gene_entry.csv"
+
+
+rule genedatasliding:
+  input:
+    [MUTTABLEDIRSLIDING + '/gene_T2C.{sample}.tsv',NORMDATADIRORIGINAL + '/pconv_{sample}.csv']
+  output:
+    NORMDATADIRSLIDING + '/gene_data_normalized.{sample}.csv'
+  shell:
+    'Rscript {NORMSCRIPT} {wildcards.sample} {NORMDATADIRORIGINAL} {MUTTABLEDIRSLIDING} {NORMDATADIRSLIDING}'
+
+rule filterdatasliding:
+  input:
+    NORMDATADIRSLIDING + '/gene_data_normalized.{sample}.csv'
+  output:
+    NORMDATADIRSLIDING + '/gene_data_normalized_filtered.{sample}.csv'
+  shell:
+    'Rscript {FILTERSCRIPT} {wildcards.sample} {NORMDATADIRSLIDING}'
+
+rule distributegenessliding:
+  input:
+    expand('{normdatadir}/gene_data_normalized.{sample}.csv',sample=SAMPLES,normdatadir=NORMDATADIRSLIDING)
+  output:
+    GENEDATADIRSLIDING + '/gene_distribution_finished.txt'
+  shell:
+    '{DISTRIBUTESCRIPT} {NORMDATADIRSLIDING} {GENEDATADIRSLIDING}'
+
+
+rule gene_from_contigsliding:
+  input:
+    [expand('{tmpdir}/gene_T2C.{contig}.{{sample}}.{{fraction}}.tsv',contig=CONTIGS,tmpdir=TMPDIRSLIDING)]
+  output:
+    MUTTABLEDIRSLIDING + '/gene_T2C.{sample}.{fraction}.tsv'
+  shell:
+    "cat {TMPDIRSLIDING}/gene_T2C.*.{wildcards.sample}.{wildcards.fraction}.tsv | sed -e '2,${{/^gene_id/d' -e '}}' > {output}"
+
+rule T2Csliding:
+  input:
+    TMPDIRORIGINAL + '/mm10_sorted_{sample}.{fraction}.{contig}.bam'
+  output:
+    TMPDIRSLIDING + '/gene_T2C.{contig}.{sample}.{fraction}.tsv'
+  shell:
+    'module load gcc/7.2.0-0; {COUNTT2CSLIDING} -r {TMPDIRORIGINAL}/mm10_sorted_{wildcards.sample}.{wildcards.fraction}.{wildcards.contig}.bam {GENOME} -e {MUTATIONFILE} -g {ANNOTATIONDIRSLIDING}/sliding_intron_parallel_{wildcards.contig}.gff -o {TMPDIRSLIDING}/gene_T2C.{wildcards.contig}.{wildcards.sample}.{wildcards.fraction}.tsv -m {TMPDIRSLIDING}/mutation_position.{wildcards.contig}.{wildcards.sample}.{wildcards.fraction}.tsv -d {TMPDIRSLIDING}/frequencies_sliding_intron_T2C.{wildcards.contig}.{wildcards.sample}.{wildcards.fraction}.tsv'
+
+
+################################3
+
+
+rule pconvoriginal_exonic:
+  input:
+    [MUTTABLEDIRORIGINAL + '/frequencies_T2C.{sample}.{fraction}.tsv',MUTTABLEDIRORIGINAL + '/frequencies_A2G.{sample}.{fraction}.tsv']
+  output:
+    NORMDATADIRORIGINAL + '/pconv_exonic_{sample}.{fraction}.csv'
+  shell:
+    'Rscript {FITSCRIPT} {input[0]} {input[1]} {NORMDATADIRORIGINAL}/pconv_exonic_{wildcards.sample}.{wildcards.fraction}.csv {NORANDOM} {RANDOMFACT} 1 FALSE'
+
+
+
+rule pconvoriginal:
+  input:
+    [MUTTABLEDIRORIGINAL + '/frequencies_T2C.{sample}.{fraction}.tsv',MUTTABLEDIRORIGINAL + '/frequencies_A2G.{sample}.{fraction}.tsv']
+  output:
+    NORMDATADIRORIGINAL + '/pconv_{sample}.{fraction}.csv'
+  shell:
+    'Rscript {FITSCRIPT} {input[0]} {input[1]} {NORMDATADIRORIGINAL}/pconv_{wildcards.sample}.{wildcards.fraction}.csv {NORANDOM} {RANDOMFACT} 1 {USEINTRONIC}'
+
+rule frequencies_from_contigoriginal:
+  input:
+    [expand('{tmpdir}/frequencies_{{mutation}}.{contig}.{{sample}}.{{fraction}}.tsv',contig=CONTIGS,tmpdir=TMPDIRORIGINAL)]
+  output: 
+    MUTTABLEDIRORIGINAL + '/frequencies_{mutation}.{sample}.{fraction}.tsv'
+  shell:
+    'cat {TMPDIRORIGINAL}/frequencies_{wildcards.mutation}.*.{wildcards.sample}.{wildcards.fraction}.tsv | {COMPILESCRIPT} > {output}'
+
+
+rule T2Coriginal:
+  input:
+    TMPDIRORIGINAL + '/mm10_sorted_{sample}.{fraction}.{contig}.bam'
+  output:
+    TMPDIRORIGINAL + '/frequencies_T2C.{contig}.{sample}.{fraction}.tsv', TMPDIRORIGINAL + '/gene_T2C.{contig}.{sample}.{fraction}.tsv'
+  shell:
+    'module load gcc/7.2.0-0; {COUNTT2C} -r {TMPDIRORIGINAL}/mm10_sorted_{wildcards.sample}.{wildcards.fraction}.{wildcards.contig}.bam {GENOME} -e {MUTATIONFILE} -g {ANNOTATIONFILEORIGINAL} -o {TMPDIRORIGINAL}/gene_T2C.{wildcards.contig}.{wildcards.sample}.{wildcards.fraction}.tsv -m {TMPDIRORIGINAL}/mutation_position.{wildcards.contig}.{wildcards.sample}.{wildcards.fraction}.tsv -d {TMPDIRORIGINAL}/frequencies_T2C.{wildcards.contig}.{wildcards.sample}.{wildcards.fraction}.tsv'
+
+rule A2Goriginal:
+  input:
+    TMPDIRORIGINAL + '/mm10_sorted_{sample}.{fraction}.{contig}.bam'
+  output:
+    TMPDIRORIGINAL + '/frequencies_A2G.{contig}.{sample}.{fraction}.tsv'
+  shell:
+    'module load gcc/7.2.0-0; {COUNTT2C} {TMPDIRORIGINAL}/mm10_sorted_{wildcards.sample}.{wildcards.fraction}.{wildcards.contig}.bam {GENOME} -e {MUTATIONFILE} -g {ANNOTATIONFILEORIGINAL} -o {TMPDIRORIGINAL}/gene_A2G.{wildcards.contig}.{wildcards.sample}.{wildcards.fraction}.tsv -d {TMPDIRORIGINAL}/frequencies_A2G.{wildcards.contig}.{wildcards.sample}.{wildcards.fraction}.tsv'
+
+rule split_bam:
+  input: 
+    BAMDIR + '/mm10_{sample}.{fraction}_Aligned.sortedByCoord.out.bam',
+    BAMDIR + '/mm10_{sample}.{fraction}_Aligned.sortedByCoord.out.bam.bai'
+  output:
+    TMPDIRORIGINAL + '/mm10_{sample}.{fraction}.{contig}.bam'
+  shell:
+    'samtools view -bh {input} {wildcards.contig} | samtools sort -n > {output}'
+
+rule index_bam:
+  input:
+    '{x}.bam'
+  output:
+    '{x}.bam.bai'
+  shell:
+    'samtools index {input}'
+
+rule align:
+  input:
+    [FASTQ + '/renamed.{sample}_1.fastq.gz',FASTQ + '/renamed.{sample}_2.fastq.gz',GENOMEDIR+'/STAR/Genome']
+  output:
+    BAMDIR + '/mm10_{sample}.{fraction}_Aligned.sortedByCoord.out.bam'
+  resources: 
+    mem_per_cpu=16000
+  threads: 6
+  shell:
+    '{STAR} --runThreadN {threads} --genomeDir {GENOMEDIR}/STAR --readFilesCommand zcat --readFilesIn  {input[0]} {input[1]} --outFilterType BySJout --outFilterMultimapNmax 10 --alignSJoverhangMin 8 --alignSJDBoverhangMin 3 --outFilterMismatchNmax 35 --alignIntronMin 20 --alignIntronMax 1000000 --outFileNamePrefix {BAMDIR}/mm10_{wildcards.sample}.{wildcards.fraction}_ --outSAMtype BAM SortedByCoordinate --outReadsUnmapped Fastx --outSAMattributes AS NH HI nM NM jM MD jI --alignEndsType EndToEnd --seedSearchStartLmax 10'
+
+rule sort:
+  input:
+    TMPDIRORIGINAL + '/mm10_{sample}.{fraction}.{contig}.bam'
+  output:
+    TMPDIRORIGINAL + '/mm10_sorted_{sample}.{fraction}.{contig}.bam'
+  shell:
+    'samtools sort -n {input} > {output}'
+
+rule create_index_star:
+  input:
+    [GENOME,ANNOTATIONFILEORIGINAL]
+  output:
+    [GENOMEDIR+'/STAR/Genome']
+  threads: 4
+  resources: 
+    mem_per_cpu=32000
+  shell:
+   'STAR --runThreadN 6 --runMode genomeGenerate --genomeDir {GENOMEDIR}/STAR --genomeFastaFiles {GENOME} --sjdbGTFfile {ANNOTATIONFILEORIGINAL} --sjdbGTFtagExonParentTranscript Parent --sjdbOverhang 149'
+    
+rule download_genome:
+  input:
+  output:
+    [GENOME,ANNOTATIONFILEORIGINAL,GENOMEDIR + '/gencode_protein_coding_no_mt.gtf']
+  shell:
+    '{DOWNLOADSCRIPT} {GENOMEDIR}'
+
+rule rsem:
+  input:
+    [FASTQ + '/renamed.{sample}_1.fastq.gz',FASTQ + '/renamed.{sample}_2.fastq.gz',RSEMINDEXDIR+'/mouse_gencode.rev.1.ebwt']
+  output:
+    RSEMDIR + '/rsem_{sample}.{fraction}.tsv.genes.results'
+  threads: 2
+  resources: 
+    mem_per_cpu=64000
+  shell:
+    'rsem-calculate-expression --star --star-gzipped-read-file --paired-end --forward-prob 0 --no-bam-output --estimate-rspd -p {threads} {input[0]} {input[1]} {RSEMINDEXDIR} {RSEMDIR}/rsem_{wildcards.sample}.{wildcards.fraction}.tsv'
+
+rule create_index_rsem:
+  input:
+    [GENOME,GENOMEDIR + '/gencode_protein_coding_no_mt.gtf']
+  output:
+    [RSEMINDEXDIR+'/mouse_gencode.rev.1.ebwt']
+  threads: 2
+  resources: 
+    mem_per_cpu=64000
+  shell:
+   'rsem-prepare-reference -p 2 --gtf {GENOMEDIR}/gencode_protein_coding_no_mt.gtf --star {GENOME} {RSEMINDEXDIR}'

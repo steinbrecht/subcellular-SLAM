@@ -1,0 +1,62 @@
+# --- THINGS TO CUSTOMIZE ----------------------------------------------
+# set the list of samples to process (example list given here)
+SAMPLES=["c0min3.cyto","c0min4.cyto",]
+
+# set your local directory (change this)
+YOUR_DIR = './'
+
+# --- OTHER DIRECTORIES DEPENDENT ON DIR SET ABOVE ----------------
+OUTPUTDIR=YOUR_DIR + 'slamseq_annotation'
+RSEMDIR=YOUR_DIR + 'slam_seq/rsem'
+GENOMEDIR=YOUR_DIR + 'slam_seq/reference'
+COUNTCOMPDIR=YOUR_DIR + 'slam_seq/intron_exon_count_comparison'
+
+OUTPATH=GENOMEDIR + '/RSEM_SNAKE'
+ANNOTATIONFILE=GENOMEDIR + '/gencode.vM14.basic.annotation.gff3'
+EXCLUSIONFRAME='exclusion_table_nucleus_contamination.csv'
+
+CONTIGS=['chr1','chr10','chr11','chr12','chr13','chr14','chr15','chr16','chr17','chr18','chr19','chr2','chr3','chr4','chr5','chr6','chr7','chr8','chr9','chrM','chrX','chrY']
+
+
+# --- SNAKEMAKE PART ----------------------------------------------------------
+rule all:
+ input:
+   [expand('{outpath}/sliding_intron_parallel_{contig}.gff',outpath=OUTPATH,contig=CONTIGS),
+   'rsem_top_expressed_transcripts_total.csv',
+   'tpm_normalized_fraction_counts.csv',
+    'introns_only.gff',
+   ]
+
+
+rule annotate:
+  input:
+    ['rsem_top_expressed_transcripts_total.csv',ANNOTATIONFILE]
+  output:
+    [expand('{outpath}/sliding_intron_parallel_{contig}.gff',outpath=OUTPATH,contig=CONTIGS)]
+  shell:
+    'Rscript assembly_rsem_based_new.R {input[1]} 4 {OUTPATH}'
+
+rule compile_rsem:
+  input:
+   [expand('{rsemdir}/rsem_{samples}.tsv.isoforms.results',rsemdir=RSEMDIR,samples=SAMPLES),EXCLUSIONFRAME]
+  output:
+    ['rsem_top_expressed_transcripts_total.csv','tpm_normalized_fraction_counts.csv','tpm_normalized_fraction_counts_not_averaged.csv']
+  shell:
+    'Rscript compile_rsem_info.R {RSEMDIR}'
+
+rule create_exclusion:
+  input:
+   [expand('{countcompdir}/count.intron.{samples}.txt',countcompdir=COUNTCOMPDIR,samples=SAMPLES),expand('{countcompdir}/count.exon.{samples}.txt',countcompdir=COUNTCOMPDIR,samples=SAMPLES)]
+  output:
+    EXCLUSIONFRAME
+  shell:
+    'Rscript create_exclusion_frame.R'
+
+
+rule introns:
+  input:
+    ANNOTATIONFILE
+  output:
+    'introns_only.gff'
+  shell:
+    'Rscript intron_assembly.R {input} 4'
