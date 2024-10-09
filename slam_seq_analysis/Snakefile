@@ -1,0 +1,377 @@
+# snakefile for read alignment, T2C mutation counting, estimating conversion rate, ...
+# snakefile is run with the following command:
+# snakemake --profile ../brecht_profile/ -j 40
+
+import os
+import re
+
+# --- THINGS TO CUSTOMIZE ----------------------------------------------
+configfile: "config.yaml"
+
+# use snakemakes function to collect filenames without extension in fastq dir
+(SAMPLES,) = glob_wildcards(os.path.join(config["fastq_dir"], "{id}.fastq.gz"))
+
+# now replace the replicate and fwd/rev numbers to get sample list and remove duplicates
+delimiter = r"_\d{1,}"
+SAMPLES = list(set([re.split(delimiter, x)[0] for x in SAMPLES]))
+
+# # set the list of samples to process (example list given here)
+# SAMPLES = [
+#   'small_lower_c180min1', 'small_m40min1', 'small_n60min2',
+# ]
+
+# --- MAIN OUTPUT FILES -------------------------------------------------
+FINAL_OUTFILES = config["main_tables"]
+
+
+# --- MAIN DIRECTORIES --------------------------------------------------
+# input directories/files
+FASTQ = config["fastq_dir"]
+MUTATIONFILE = config["snp_file"]
+SCRIPTDIR = config["script_dir"]
+COUNTT2CDIR = config["countt2c_dir"]
+
+# output directories
+OUTPUTDIR = config["output_dir"]
+GENOMEDIR = config["genome_dir"]
+RSEMINDEXDIR = config["rsemindex_dir"]
+
+
+# --- OTHER DIRECTORIES DEPENDENT ON DIRS SET ABOVE ----------------
+# output subdirs
+MUTTABLEDIR = os.path.join(OUTPUTDIR, "mutation_tables")
+TMPDIR = os.path.join(OUTPUTDIR, "tmp")
+NORMDATADIR = os.path.join(OUTPUTDIR, "normalized_data")
+RSEMDIR = os.path.join(OUTPUTDIR, "rsem")
+BAMDIR = os.path.join(OUTPUTDIR, "alignment_data")
+FINALDIR = os.path.join(OUTPUTDIR, "final")
+
+# genome reference files
+GENOME = os.path.join(GENOMEDIR, "GRCm38.primary_assembly.genome.fa")
+ANNOTATION_GTF = os.path.join(GENOMEDIR, "gencode.vM14.basic.annotation.gtf")
+ANNOTATION_GFF = os.path.join(GENOMEDIR, "gencode.vM14.basic.annotation.gff3")
+
+# path to CountT2C program
+COUNTT2C = os.path.join(COUNTT2CDIR, "countT2C")
+
+# paths to scripts
+FITSCRIPT = os.path.join(SCRIPTDIR, "fit_binomial_mixture_input_file.R")
+NORMSCRIPT = os.path.join(SCRIPTDIR, "normalize_T2C_data_all_interface.R")
+DISTRIBUTESCRIPT = os.path.join(SCRIPTDIR, "awk_collect.sh")
+COMPILESCRIPT = os.path.join(SCRIPTDIR, "compile_frequencies.sh")
+DOWNLOADSCRIPT = os.path.join(SCRIPTDIR, "download_genome.sh")
+
+
+# --- PARAMETERS ----------------------------------------------------------
+# estimating conversion rates
+NORANDOM = config["conversion_rate"]["n_random"]
+RANDOMFACT = config["conversion_rate"]["random_factor"]
+USEINTRONIC = config["conversion_rate"]["use_intronic"]
+
+# STAR parameters
+STAR_INDEX = config["star"]["star_index"]
+
+# contigs to split bam files to make CountT2C easier (all the mouse chromosomes)
+CONTIGS = config["contigs"]
+
+
+
+# --- SNAKEMAKE PART ----------------------------------------------------------
+rule all:
+    input:
+        # expand(
+        #     "{tmpdir}/counts_T2C.{contig}.{sample}.tsv",
+        #     sample=SAMPLES,
+        #     contig=CONTIGS,
+        #     tmpdir=TMPDIR,
+        # ),
+        expand(
+            "{finaldir}/{name_file}",
+            finaldir=FINALDIR, 
+            name_file=FINAL_OUTFILES,
+        ),
+        os.path.join(FINALDIR, "list_of_fittable_genes.csv"),
+
+
+rule make_list_of_fittable_genes:
+    threads: 2
+    resources:
+        mem_mb=16000,
+        time="04:00:00",
+    params:
+        cutoff=config['min_T_count']
+    input:
+        complete=os.path.join(FINALDIR, "all_T2C_data_normalized.tsv"),
+    output:
+        gene_list=os.path.join(FINALDIR, "list_of_fittable_genes.csv"),
+    conda:
+        "envs/r-tools.yaml"
+    script:
+        "scripts/filter_genes_for_fitting.R"
+
+
+rule make_final_t2c_tables_from_samples:
+    threads: 2
+    resources:
+        mem_mb=16000,
+        time="04:00:00",
+    input: 
+        tsv_files=expand(
+            "{normdatadir}/counts_T2C_normalized.{sample}.tsv",
+            normdatadir=NORMDATADIR, sample=SAMPLES,
+        ),
+        gff3_file=ANNOTATION_GFF,
+    output:
+        complete=os.path.join(FINALDIR, "all_T2C_data_normalized.tsv"),
+        gene_level=os.path.join(FINALDIR, "gene_level_T2C_data_normalized.tsv"),
+        exon_level=os.path.join(FINALDIR, "exon_level_T2C_data_normalized.tsv"),
+    conda:
+        "envs/r-tools.yaml"
+    script:
+        "scripts/combine_tsv_all_samples.R"
+
+
+rule normalize_t2c_data:
+    threads: 1
+    resources:
+        mem_mb=2000,
+        time="04:00:00",
+    input:
+        [
+            TMPDIR + "/counts_T2C.{sample}.tsv",
+            NORMDATADIR + "/pconv_{sample}.csv",
+        ],
+    output:
+        NORMDATADIR + "/counts_T2C_normalized.{sample}.tsv",
+    conda:
+        "envs/r-tools.yaml"
+    shell:
+        "Rscript {NORMSCRIPT} {wildcards.sample} {NORMDATADIR} {TMPDIR} {NORMDATADIR}"
+
+
+# add rule to get T2C count data from all contigs back to one file per sample
+rule combine_t2c_data_from_contigs:
+    threads: 1
+    resources:
+        mem_mb=2000,
+        time="04:00:00",
+    input:
+        expand(
+            "{tmpdir}/counts_T2C.{contig}.{sample}.tsv",
+            sample=SAMPLES,
+            contig=CONTIGS,
+            tmpdir=TMPDIR,
+        ),
+    output:
+        TMPDIR + "/counts_T2C.{sample}.tsv",
+    shell:
+        "cat {TMPDIR}/counts_T2C.*.{wildcards.sample}.tsv | sed -e '2,${{/^gene_id/d' -e '}}' > {output}"
+
+
+rule pconv_exonic:
+    threads: 2
+    resources:
+        mem_mb=8000,
+        time="04:00:00",
+    input:
+        [
+            MUTTABLEDIR + "/frequencies_T2C.{sample}.tsv",
+            MUTTABLEDIR + "/frequencies_A2G.{sample}.tsv",
+        ],
+    output:
+        NORMDATADIR + "/pconv_exonic_{sample}.csv",
+    conda:
+        "envs/r-tools.yaml"
+    shell:
+        "Rscript {FITSCRIPT} {input[0]} {input[1]} {NORMDATADIR}/pconv_exonic_{wildcards.sample}.csv {NORANDOM} {RANDOMFACT} 1 FALSE"
+
+
+rule pconv:
+    threads: 2
+    resources:
+        mem_mb=8000,
+        time="04:00:00",
+    input:
+        [
+            MUTTABLEDIR + "/frequencies_T2C.{sample}.tsv",
+            MUTTABLEDIR + "/frequencies_A2G.{sample}.tsv",
+        ],
+    output:
+        NORMDATADIR + "/pconv_{sample}.csv",
+    conda:
+        "envs/r-tools.yaml"
+    shell:
+        "Rscript {FITSCRIPT} {input[0]} {input[1]} {NORMDATADIR}/pconv_{wildcards.sample}.csv {NORANDOM} {RANDOMFACT} 1 {USEINTRONIC}"
+
+
+rule frequencies_from_contig:
+    threads: 2
+    resources:
+        mem_mb=8000,
+        time="04:00:00",
+    input:
+        [
+            expand(
+                "{tmpdir}/frequencies_{mutation}.{contig}.{{sample}}.tsv",
+                contig=CONTIGS,
+                tmpdir=TMPDIR,
+                mutation=config['mutations'],
+            )
+        ],
+    output:
+        MUTTABLEDIR + "/frequencies_{mutation}.{sample}.tsv",
+    conda:
+        "envs/r-tools.yaml"
+    shell:
+        "cat {TMPDIR}/frequencies_{wildcards.mutation}.*.{wildcards.sample}.tsv | {COMPILESCRIPT} > {output}"
+
+
+rule T2C:
+    threads: 4
+    resources:
+        mem_mb=16000,
+        time="04:00:00",
+    input:
+        bam=TMPDIR + "/mm10_sorted_{sample}.{contig}.bam",
+        fa_index=GENOME + ".fai",
+        snp_file=config['snp_file'],
+    output:
+        TMPDIR + "/frequencies_T2C.{contig}.{sample}.tsv",
+        TMPDIR + "/counts_T2C.{contig}.{sample}.tsv",
+    params:
+        main=config["count_t2c"]["main"],
+        paired=config["count_t2c"]["paired"],
+        length=config["count_t2c"]["length"],
+        clip=config["count_t2c"]["clip"],
+    conda:
+        "envs/count_t2c.yaml"
+    shell:
+        "module load gcc/7.2.0-0; {COUNTT2C} {params.main} {params.paired} {params.length} {params.clip} -r {input.bam} {GENOME} -e {input.snp_file} -g {ANNOTATION_GFF} -o {TMPDIR}/counts_T2C.{wildcards.contig}.{wildcards.sample}.tsv -m {TMPDIR}/mutation_position.{wildcards.contig}.{wildcards.sample}.tsv -d {TMPDIR}/frequencies_T2C.{wildcards.contig}.{wildcards.sample}.tsv"
+
+
+rule A2G:
+    threads: 4
+    resources:
+        mem_mb=16000,
+        time="04:00:00",
+    input:
+        bam=TMPDIR + "/mm10_sorted_{sample}.{contig}.bam",
+        fa_index=GENOME + ".fai",
+        snp_file=config['snp_file'],
+    output:
+        TMPDIR + "/frequencies_A2G.{contig}.{sample}.tsv",
+    params:
+        main=config["count_t2c"]["main"],
+        paired=config["count_t2c"]["paired"],
+        length=config["count_t2c"]["length"],
+        clip=config["count_t2c"]["clip"],
+    conda:
+        "envs/count_t2c.yaml"
+    shell:
+        "module load gcc/7.2.0-0; {COUNTT2C} {params.main} {params.paired} {params.length} {params.clip} {input.bam} {GENOME} -e {input.snp_file} -g {ANNOTATION_GFF} -o {TMPDIR}/counts_A2G.{wildcards.contig}.{wildcards.sample}.tsv -d {TMPDIR}/frequencies_A2G.{wildcards.contig}.{wildcards.sample}.tsv"
+
+
+rule split_bam:
+    threads: 8
+    resources:
+        mem_mb=24000,
+        time="04:00:00",
+    input:
+        BAMDIR + "/mm10_{sample}_Aligned.sortedByCoord.out.bam",
+        BAMDIR + "/mm10_{sample}_Aligned.sortedByCoord.out.bam.bai",
+    output:
+        TMPDIR + "/mm10_sorted_{sample}.{contig}.bam",
+    conda:
+        "envs/samtools.yaml"
+    shell:
+        "samtools view -bh {input} {wildcards.contig} | samtools sort -n > {output}"
+
+
+rule index_bam:
+    threads: 8
+    resources:
+        mem_mb=24000,
+        time="04:00:00",
+    input:
+        BAMDIR + "/mm10_{sample}_Aligned.sortedByCoord.out.bam",
+    output:
+        BAMDIR + "/mm10_{sample}_Aligned.sortedByCoord.out.bam.bai",
+    conda:
+        "envs/samtools.yaml"
+    shell:
+        "samtools index {input} > {output}"
+
+
+rule align:
+    threads: 8
+    resources:
+        mem_mb=32000,
+        time="04:00:00",
+    input:
+        [
+            FASTQ + "/{sample}_1.fastq.gz",
+            FASTQ + "/{sample}_2.fastq.gz",
+            ancient(os.path.join(GENOMEDIR, STAR_INDEX, "Genome")),
+        ],
+    output:
+        BAMDIR + "/mm10_{sample}_Aligned.sortedByCoord.out.bam",
+    params:
+        align=config["star"]["align"],
+        split_length=config["star"]["split_length"],
+        sam_attributes=config["star"]["sam_attributes"],
+        other=config["star"]["other"],
+    conda:
+        "envs/star.yaml"
+    shell:
+        "STAR --runThreadN {threads} --genomeDir {GENOMEDIR}/{STAR_INDEX} --readFilesCommand zcat --readFilesIn {input[0]} {input[1]} --outFileNamePrefix {BAMDIR}/mm10_{wildcards.sample}_ {params.align} {params.split_length} {params.sam_attributes} {params.other}"
+
+
+rule create_index_star:
+    threads: 8
+    resources:
+        mem_mb=64000,
+        time="04:00:00",
+    params:
+        overhang=config['star']['sjdb_overhang']
+    input:
+        fa=ancient(GENOME),
+        gtf=ancient(ANNOTATION_GTF),
+        # [ancient(GENOME), ancient(ANNOTATION_GFF)],
+    output:
+        [os.path.join(GENOMEDIR, STAR_INDEX, "Genome")],
+    conda:
+        "envs/star.yaml"
+    shell:
+        "STAR --runThreadN {threads} --runMode genomeGenerate --genomeDir {GENOMEDIR}/{STAR_INDEX} --genomeFastaFiles {input.fa} --sjdbGTFfile {input.gtf} --sjdbGTFtagExonParentTranscript Parent --sjdbOverhang {params.overhang} --limitGenomeGenerateRAM 60000000000"
+
+
+rule fasta_index:
+    threads: 8
+    resources:
+        mem_mb=16000,
+        time="04:00:00",
+    input:
+        fa=ancient(GENOME),
+    output:
+        GENOME + ".fai",
+    conda:
+        "envs/samtools.yaml"
+    shell:
+        "samtools faidx {input.fa}"
+
+
+rule download_genome:
+    threads: 2
+    resources:
+        mem_mb=16000,
+        time="04:00:00",
+    input: [],
+    output:
+        [
+            GENOME,
+            ANNOTATION_GTF,
+            ANNOTATION_GFF,
+            GENOMEDIR + "/gencode_protein_coding_no_mt.gtf",
+        ],
+    shell:
+        "{DOWNLOADSCRIPT} {GENOMEDIR}"

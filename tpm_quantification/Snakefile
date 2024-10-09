@@ -1,0 +1,116 @@
+# snakefile for downloading genome, creating annotation files (for intronic regions), ...
+# snakefile is run with the following command:
+# snakemake --profile ../brecht_profile/ -j 60
+
+import os
+import re
+
+
+# --- THINGS TO CUSTOMIZE ----------------------------------------------
+configfile: "config.yaml"
+
+# use snakemakes function to collect filenames without extension in fastq dir
+(SAMPLES,) = glob_wildcards(os.path.join(config["fastq_dir"], "{id}.fastq.gz"))
+# now replace the replicate and fwd/rev numbers to get sample list and remove duplicates
+delimiter = r"_\d{1,}"
+SAMPLES = list(set([re.split(delimiter, x)[0] for x in SAMPLES]))
+
+# # set the list of samples to process (example list given here)
+# SAMPLES = [
+#   'small_renamed.lower_c180min1', 'small_renamed.m40min1', 'small_renamed.n60min2',
+# ]
+
+
+# --- MAIN DIRECTORIES --------------------------------------------------
+# input directories/files
+FASTQ = config["fastq_dir"]
+
+# output directories
+OUTPUTDIR = config["output_dir"]
+GENOMEDIR = config["genome_dir"]
+RSEMINDEXDIR = config["rsemindex_dir"]
+
+
+# --- OTHER DIRECTORIES DEPENDENT ON DIR SET ABOVE ----------------
+BAMDIR = os.path.join(OUTPUTDIR, "alignment_data")
+RSEMDIR = os.path.join(OUTPUTDIR, "rsem")
+ANNOTATIONFILE = os.path.join(GENOMEDIR, "gencode.vM14.basic.annotation.gff3")
+
+
+
+# --- SNAKEMAKE PART ----------------------------------------------------------
+rule all:
+    input:
+        "rsem_top_expressed_transcripts_total.csv",
+        "tpm_normalized_fraction_counts.csv",
+
+
+
+rule compile_rsem:
+    threads: 4
+    resources:
+        mem_mb=16000,
+        time="04:00:00",
+    input:
+        expand(
+            "{rsemdir}/rsem_{samples}.tsv.isoforms.results",
+            rsemdir=RSEMDIR,
+            samples=SAMPLES,
+        ),
+    output:
+        [
+            "rsem_top_expressed_transcripts_total.csv",
+            "tpm_normalized_fraction_counts.csv",
+            "tpm_normalized_fraction_counts_not_averaged.csv",
+        ],
+    conda:
+        "envs/r-tools.yaml"
+    shell:
+        "Rscript scripts/compile_rsem_info.R {RSEMDIR}"
+
+
+rule rsem:
+    threads: 4
+    resources:
+        mem_mb=32000,
+        time="04:00:00",
+    input:
+        [
+            FASTQ + "/{sample}_1.fastq.gz",
+            FASTQ + "/{sample}_2.fastq.gz",
+            rsemindex=RSEMINDEXDIR + "/mouse_gencode.rev.1.ebwt",
+        ],
+    output:
+        RSEMDIR + "/rsem_{sample}.tsv.isoforms.results",
+    conda:
+        "envs/rsem.yaml"
+    shell:
+        "rsem-calculate-expression --star-gzipped-read-file --paired-end --no-bam-output --estimate-rspd -p {threads} {input[0]} {input[1]} {RSEMINDEXDIR} {RSEMDIR}/rsem_{wildcards.sample}.tsv"
+
+
+rule create_index_rsem:
+    threads: 8
+    resources:
+        mem_mb=64000,
+        time="04:00:00",
+    input:
+        [GENOME, GENOMEDIR + "/gencode_protein_coding_no_mt.gtf"],
+    output:
+        [RSEMINDEXDIR + "/mouse_gencode.rev.1.ebwt"],
+    conda:
+        "envs/rsem.yaml"
+    shell:
+        "rsem-prepare-reference -p 4 --star --gtf {GENOMEDIR}/gencode_protein_coding_no_mt.gtf {GENOME} {RSEMINDEXDIR}"
+
+
+rule download_genome:
+    threads: 2
+    resources:
+        mem_mb=16000,
+        time="04:00:00",
+    input: [],
+    output:
+        [GENOME, ANNOTATION_GTF, GENOMEDIR + "/gencode_protein_coding_no_mt.gtf"],
+    shell:
+        "scripts/download_genome.sh {GENOMEDIR}"
+

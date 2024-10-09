@@ -1,0 +1,16 @@
+# --- TO CUSTOMIZE -------------------------------------------------------------
+fastq_dir: '../example_fastq'
+
+
+# --- FIXED FILEPATHS ----------------------------------------------------------
+script_dir: 'scripts'
+genome_dir: '../data/genome'
+rsemindex_dir: '../data/genome/RSEM_ref'
+output_dir: ../data/output
+
+
+# --- PARAMTER SETTINGS --------------------------------------------------------
+
+# directory to store temporary files
+tmp: "$HOME/scratch/"
+

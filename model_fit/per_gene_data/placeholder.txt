@@ -1,0 +1,1 @@
+In this folder there should be the data structured by gene. That means one folder per gene named as ensembl gene ID that contains the normalized T2C data, expression ratios and exon distance to 3' end information. As this data is around 1 GB large, only 5 genes are included in this github project

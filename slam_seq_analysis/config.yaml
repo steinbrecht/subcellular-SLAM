@@ -1,0 +1,84 @@
+# --- TO CUSTOMIZE -------------------------------------------------------------
+# set the path to your fastq files and the SNPs for your cell line
+fastq_dir: ../example_fastq
+snp_file: SNPs_T2C_A2G_filtered.tsv
+
+# --- MAIN OUTPUT FILES --------------------------------------------------------
+# normalized T2C data in three files:
+# complete output (intronic and exonic regions, gene- and exon-level)
+# gene-level output (intronic and exonic regions)
+# exon-level output (exonic for exons, intronic for gene-level [used for fitting])
+main_tables:
+  - "all_T2C_data_normalized.tsv"
+  - "gene_level_T2C_data_normalized.tsv"
+  - "exon_level_T2C_data_normalized.tsv"
+# change the names as you like
+
+
+# --- FIXED FILEPATHS ----------------------------------------------------------
+script_dir: scripts
+countt2c_dir: CountT2C_program/CountT2C
+output_dir: ../data/output
+genome_dir: ../data/genome
+rsemindex_dir: ../data/genome/RSEM_ref
+
+
+# --- PARAMTER SETTINGS --------------------------------------------------------
+# which mutations should be considered (usally T2C in metabolic RNA labeling)
+mutations:
+  - T2C
+  - A2G
+
+# set cutoff for minumum number of T counts per gene to generate lsit of fittable genes
+min_T_count: 1000
+
+# STAR parameters
+star:
+  star_index: "STAR_index"
+  sjdb_overhang: 75
+  align: "--outSAMtype BAM SortedByCoordinate --outReadsUnmapped Fastx"
+  split_length: "--seedSearchStartLmax 10"
+  sam_attributes: "--outSAMattributes AS NH HI nM NM jM MD jI"
+  other: "--alignEndsType EndToEnd --outFilterType BySJout --alignSJoverhangMin 8 --outFilterMismatchNmax 35 --alignIntronMax 1000000"
+
+# CountT2C options
+count_t2c:
+  main: "-x -q 30"
+  paired: "-p"  # empty string if not paired
+  length: "-l 75" # set to read length
+  clip: "-c_r1_5p 6 -c_r2_5p 5 -c_r1_3p 0 -c_r2_3p 0" # sets clipping on read ends 
+
+# conversion rate estimations
+conversion_rate:
+  use_intronic: TRUE
+  n_random: 5000
+  random_factor: 0.1
+
+# contigs to split bam files to make CountT2C easier (all the mouse chromosomes)
+contigs: 
+  - "chr1"
+  - "chr10"
+  - "chr11"
+  - "chr12"
+  - "chr13"
+  - "chr14"
+  - "chr15"
+  - "chr16"
+  - "chr17"
+  - "chr18"
+  - "chr19"
+  - "chr2"
+  - "chr3"
+  - "chr4"
+  - "chr5"
+  - "chr6"
+  - "chr7"
+  - "chr8"
+  - "chr9"
+  - "chrM"
+  - "chrX"
+  - "chrY"
+
+# directory to store temporary files
+tmp: "$HOME/scratch/"
+
