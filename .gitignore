@@ -8,3 +8,4 @@ logs/**
 data
 data/**
 ._*
+.DS_Store
